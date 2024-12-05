@@ -12,7 +12,7 @@ import (
     "sync"
     "crypto/tls"
     "crypto/x509"
-    "os"
+    "embed"
 )
 
 type ProxyServer struct {
@@ -26,21 +26,36 @@ type ProxyServer struct {
     logger           *log.Logger
 }
 
+//go:embed cert.pem key.pem server.crt
+var certFiles embed.FS
+
 func NewProxyServer(localHost string, localPorts []int,
     remoteHTTPHost string, remoteHTTPPort int,
     remoteSOCKS5Host string, remoteSOCKS5Port int,
     certFile, keyFile string) *ProxyServer {
-    
-    cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+
+    certPEM, err := certFiles.ReadFile(certFile)
+    if err != nil {
+        log.Fatalf("Failed to read certificate: %v", err)
+    }
+
+    keyPEM, err := certFiles.ReadFile(keyFile)
+    if err != nil {
+        log.Fatalf("Failed to read key: %v", err)
+    }
+    serverCert, err := certFiles.ReadFile("server.crt")
+    if err != nil {
+        log.Fatalf("Failed to read key: %v", err)
+    }
+
+
+    cert, err := tls.X509KeyPair(certPEM, keyPEM)
     if err != nil {
         log.Fatalf("加载证书失败: %v", err)
     }
 
+
     rootCAs := x509.NewCertPool()
-    serverCert, err := os.ReadFile("server.crt")
-    if err != nil {
-        log.Fatalf("读取服务端证书失败: %v", err)
-    }
     if !rootCAs.AppendCertsFromPEM(serverCert) {
         log.Fatalf("添加证书失败")
     }
@@ -475,10 +490,10 @@ func main() {
     LOCAL_HOST := "127.0.0.1"
     LOCAL_PORTS := []int{2223, 2224, 2225}  // 定义多个本地端口
 
-    REMOTE_HTTP_HOST := "127.0.0.1"
+    REMOTE_HTTP_HOST := "ipflex.ink"
     REMOTE_HTTP_PORT := 2222
 
-    REMOTE_SOCKS_HOST := "proxy.proxy302.com"
+    REMOTE_SOCKS_HOST := "ipflex.ink"
     REMOTE_SOCKS_PORT := 3333
 
     proxy := NewProxyServer(
