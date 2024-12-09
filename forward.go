@@ -491,10 +491,10 @@ func main() {
     LOCAL_PORTS := []int{2223, 2224, 2225}  // 定义多个本地端口
 
     REMOTE_HTTP_HOST := "ipflex.ink"
-    REMOTE_HTTP_PORT := 2222
+    REMOTE_HTTP_PORT := 12345
 
     REMOTE_SOCKS_HOST := "ipflex.ink"
-    REMOTE_SOCKS_PORT := 3333
+    REMOTE_SOCKS_PORT := 12346
 
     proxy := NewProxyServer(
         LOCAL_HOST, LOCAL_PORTS,
