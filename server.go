@@ -138,7 +138,7 @@ func main() {
 
     // 服务器配置
     HTTP_HOST := "43.198.80.215"
-    HTTP_PORT := 2222
+    HTTP_PORT := 12345
     SOCKS5_HOST := "43.198.80.215" 
     SOCKS5_PORT := 3333
 
