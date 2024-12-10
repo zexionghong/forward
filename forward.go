@@ -13,6 +13,9 @@ import (
     "crypto/tls"
     "crypto/x509"
     "embed"
+    "net/http"
+    "os"
+    "encoding/json"
 )
 
 type ProxyServer struct {
@@ -89,10 +92,8 @@ func (ps *ProxyServer) detectProtocol(conn net.Conn) (string, []byte, error) {
     firstByte := buf[0]
 
     if firstByte == 0x05 {
-        ps.logger.Println("检测到 SOCKS5 协议")
         return "socks5", buf, nil
     } else {
-        ps.logger.Println("检测到 HTTP/HTTPS 协议")
         return "http", buf, nil
     }
 }
@@ -135,11 +136,10 @@ func (ps *ProxyServer) handleHTTP(clientConn net.Conn, firstByte []byte) {
         return
     }
 
-    ps.logger.Println("HTTP 认证成功")
 
     remoteConn, err := ps.dialRemote("tcp", fmt.Sprintf("%s:%d", ps.RemoteHTTPHost, ps.RemoteHTTPPort))
     if err != nil {
-        ps.logger.Printf("连接远程 HTTP 代理错误: %v", err)
+        ps.logger.Printf("连接远程 HTTP 代理错误")
         return
     }
     defer remoteConn.Close()
@@ -157,7 +157,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
     nmethodsByte := make([]byte, 1)
     _, err := io.ReadFull(reader, nmethodsByte)
     if err != nil {
-        ps.logger.Printf("读取 nmethods 错误: %v", err)
+        ps.logger.Printf("读取 nmethods 错误")
         return
     }
     nmethods := int(nmethodsByte[0])
@@ -166,16 +166,15 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
     methods := make([]byte, nmethods)
     _, err = io.ReadFull(reader, methods)
     if err != nil {
-        ps.logger.Printf("读取 methods 错误: %v", err)
+        ps.logger.Printf("读取 methods 错误")
         return
     }
 
-    ps.logger.Println("建立 SOCKS5 连接")
 
     // 连接到远程 SOCKS5 服务器
     remoteConn, err := ps.dialRemote("tcp", fmt.Sprintf("%s:%d", ps.RemoteSOCKS5Host, ps.RemoteSOCKS5Port))
     if err != nil {
-        ps.logger.Printf("连接远程 SOCKS5 代理错误: %v", err)
+        ps.logger.Printf("连接远程 SOCKS5 代理错误")
         return
     }
     defer remoteConn.Close()
@@ -188,7 +187,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
     authResponse := make([]byte, 2)
     _, err = io.ReadFull(remoteConn, authResponse)
     if err != nil {
-        ps.logger.Printf("读取远程 SOCKS5 握手响应错误: %v", err)
+        ps.logger.Printf("读取远程 SOCKS5 握手响应错误")
         return
     }
 
@@ -240,7 +239,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
         authResult := make([]byte, 2)
         _, err = io.ReadFull(remoteConn, authResult)
         if err != nil {
-            ps.logger.Printf("读取认证响应错误: %v", err)
+            ps.logger.Printf("读取认证响应错误")
             return
         }
 
@@ -254,7 +253,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
             return
         }
     } else if authResponse[1] != 0x00 {
-        ps.logger.Printf("服务器不支持的认证方法: %v", authResponse[1])
+        ps.logger.Printf("服务器不支持的认证方法")
         return
     }
 
@@ -263,7 +262,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
     connReqHeader := make([]byte, 4)
     _, err = io.ReadFull(reader, connReqHeader)
     if err != nil {
-        ps.logger.Printf("读取连接请求头错误: %v", err)
+        ps.logger.Printf("读取连接请求头错误")
         return
     }
 
@@ -279,7 +278,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
         addr = make([]byte, 4)
         _, err = io.ReadFull(reader, addr)
         if err != nil {
-            ps.logger.Printf("读取 IPv4 地址错误: %v", err)
+            ps.logger.Printf("读取 IPv4 地址错误")
             return
         }
     case 0x03:
@@ -287,7 +286,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
         addrLenByte := make([]byte, 1)
         _, err = io.ReadFull(reader, addrLenByte)
         if err != nil {
-            ps.logger.Printf("读取域名长度错误: %v", err)
+            ps.logger.Printf("读取域名长度错误")
             return
         }
         addrLen := int(addrLenByte[0])
@@ -295,7 +294,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
         domainName := make([]byte, addrLen)
         _, err = io.ReadFull(reader, domainName)
         if err != nil {
-            ps.logger.Printf("读取域名错误: %v", err)
+            ps.logger.Printf("读取域名错误")
             return
         }
 
@@ -305,11 +304,11 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
         addr = make([]byte, 16)
         _, err = io.ReadFull(reader, addr)
         if err != nil {
-            ps.logger.Printf("读取 IPv6 地址错误: %v", err)
+            ps.logger.Printf("读取 IPv6 地址错误")
             return
         }
     default:
-        ps.logger.Printf("未知的 ATYP 值: %v", aty)
+        ps.logger.Printf("未知的 ATYP 值")
         return
     }
 
@@ -317,7 +316,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
     port := make([]byte, 2)
     _, err = io.ReadFull(reader, port)
     if err != nil {
-        ps.logger.Printf("读取端口错误: %v", err)
+        ps.logger.Printf("读取端口错误")
         return
     }
 
@@ -329,7 +328,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
     serverRespHeader := make([]byte, 4)
     _, err = io.ReadFull(remoteConn, serverRespHeader)
     if err != nil {
-        ps.logger.Printf("读取服务器响应头错误: %v", err)
+        ps.logger.Printf("读取服务器响应头错误")
         return
     }
 
@@ -337,7 +336,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
     clientConn.Write(serverRespHeader)
 
     if serverRespHeader[1] != 0x00 {
-        ps.logger.Printf("SOCKS5 连接失败，错误代码: %v", serverRespHeader[1])
+        ps.logger.Printf("SOCKS5 连接失败")
         return
     }
 
@@ -374,14 +373,14 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
         // IPv6 地址，16 字节 + 2 字节端口
         bndAddr = make([]byte, 18)
     default:
-        ps.logger.Printf("未知的 BND.ATYP 值: %v", serverRespHeader[3])
+        ps.logger.Printf("未知的 BND.ATYP 值")
         return
     }
 
     // 从远程服务器读取 BND.ADDR 和 BND.PORT
     _, err = io.ReadFull(remoteConn, bndAddr)
     if err != nil {
-        ps.logger.Printf("读取绑定地址错误: %v", err)
+        ps.logger.Printf("读取绑定地址错误")
         return
     }
 
@@ -463,7 +462,7 @@ func (ps *ProxyServer) start() {
             for {
                 conn, err := listener.Accept()
                 if err != nil {
-                    ps.logger.Printf("接受连接失败: %v", err)
+                    ps.logger.Printf("接受连接失败")
                     continue
                 }
 
@@ -478,17 +477,65 @@ func (ps *ProxyServer) start() {
 func (ps *ProxyServer) dialRemote(network, address string) (net.Conn, error) {
     conn, err := tls.Dial(network, address, ps.TLSConfig)
     if err != nil {
-        return nil, fmt.Errorf("TLS连接失败: %v", err)
+        return nil, fmt.Errorf("TLS连接失败")
     }
     return conn, nil
+}
+
+func (ps *ProxyServer) CheckVersion(version string,checkVersionUrl string) {
+    resp, err := http.Get(checkVersionUrl+"?version="+version)
+    if err != nil {
+        ps.logger.Printf( "获取版本号失败,请检查网络连接")
+        os.Exit(1)
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode != http.StatusOK {
+        ps.logger.Printf( "获取版本号失败,请检查网络连接")
+        os.Exit(1)
+    }
+    var data struct {
+        /*
+        {
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "is_latest": false,
+    "version": "1.0.0",
+    "is_deprecated": true,
+    "last_version": "1.1.1"
+  }
+}
+        */
+        code int `json:"code"`
+        msg  string `json:"msg"`
+        Data struct {
+            IsLatest     bool `json:"is_latest"`
+            Version      string `json:"version"`
+            IsDeprecated bool `json:"is_deprecated"`
+            LastVersion  string `json:"last_version"`
+        } `json:"data"`
+    }
+    if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+        ps.logger.Printf("解析版本号失败: %v", err)
+        os.Exit(1)
+    }
+    if data.Data.IsDeprecated {
+        ps.logger.Printf( "当前版本 %s 已弃用，请到官网更新最新版本: %s", version, data.Data.LastVersion)
+        os.Exit(1)
+    } else {
+        if ! data.Data.IsLatest {
+            ps.logger.Printf( "最新版本号为 %s,请及时更新", data.Data.LastVersion)
+        }
+    }
 }
 
 func main() {
     // 配置日志
     logger := log.New(io.MultiWriter(log.Writer()), "", log.LstdFlags)
-
+    version := "1.0.0" // 版本号
+    checkVersionUrl := "http://api.ipflex.ink/token/check/tool/version" // 检查版本的URL,做版本控制
     LOCAL_HOST := "127.0.0.1"
-    LOCAL_PORTS := []int{2223, 2224, 2225}  // 定义多个本地端口
+    LOCAL_PORTS := []int{12345, 12346}  // 定义多个本地端口
 
     REMOTE_HTTP_HOST := "ipflex.ink"
     REMOTE_HTTP_PORT := 12345
@@ -496,12 +543,19 @@ func main() {
     REMOTE_SOCKS_HOST := "ipflex.ink"
     REMOTE_SOCKS_PORT := 12346
 
+    fmt.Println(" ______________________________________________________________________ ")
+    fmt.Println("|                                                                      |")
+    fmt.Println("|欢迎使用IPFLEX                                                        |")
+    fmt.Println("|______________________________________________________________________|")
+    fmt.Println("")
+
+
     proxy := NewProxyServer(
         LOCAL_HOST, LOCAL_PORTS,
         REMOTE_HTTP_HOST, REMOTE_HTTP_PORT,
         REMOTE_SOCKS_HOST, REMOTE_SOCKS_PORT,
         "cert.pem", "key.pem")
-
+    proxy.CheckVersion(version,checkVersionUrl)
     proxy.logger = logger
     proxy.start()
 }

@@ -140,7 +140,7 @@ func main() {
     HTTP_HOST := "43.198.80.215"
     HTTP_PORT := 12345
     SOCKS5_HOST := "43.198.80.215" 
-    SOCKS5_PORT := 3333
+    SOCKS5_PORT := 12346
 
     // TLS证书文件路径
     CERT_FILE := "server.crt"

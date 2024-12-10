@@ -2,7 +2,7 @@
 
 # 变量定义
 BINARY_NAME=ipflex
-VERSION=1.0.0	
+VERSION=1.0.0
 BUILD_DIR=dist
 MAIN_FILE=forward.go
 
@@ -18,7 +18,7 @@ all: windows macos linux
 windows:
 	@echo "编译 Windows 版本..."
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)$(BINARY_NAME)-win-amd64.exe $(MAIN_FILE)
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-win-amd64.exe $(MAIN_FILE)
 	CGO_ENABLED=0 GOOS=windows GOARCH=386 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-win-386.exe $(MAIN_FILE)
 	@echo "Windows 版本编译完成!"
 
