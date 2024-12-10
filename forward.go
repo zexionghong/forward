@@ -16,6 +16,7 @@ import (
     "net/http"
     "os"
     "encoding/json"
+    "time"
 )
 
 type ProxyServer struct {
@@ -516,11 +517,14 @@ func (ps *ProxyServer) CheckVersion(version string,checkVersionUrl string) {
         } `json:"data"`
     }
     if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-        ps.logger.Printf("解析版本号失败: %v", err)
+        ps.logger.Printf("解析版本号失败： %v，10s后自动退出", err)
+        time.Sleep(10 * time.Second)
         os.Exit(1)
+
     }
     if data.Data.IsDeprecated {
-        ps.logger.Printf( "当前版本 %s 已弃用，请到官网更新最新版本: %s", version, data.Data.LastVersion)
+        ps.logger.Printf( "当前版本 %s 已弃用，请到官网更新最新版本: %s，10s后自动退出", version, data.Data.LastVersion)
+        time.Sleep(10 * time.Second)
         os.Exit(1)
     } else {
         if ! data.Data.IsLatest {
