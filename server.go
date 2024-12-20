@@ -137,9 +137,9 @@ func main() {
     logger := log.New(io.MultiWriter(log.Writer()), "[PROXY] ", log.LstdFlags|log.Lshortfile)
 
     // 服务器配置
-    HTTP_HOST := "43.198.80.215"
+    HTTP_HOST := "10.0.0.4"
     HTTP_PORT := 12345
-    SOCKS5_HOST := "43.198.80.215" 
+    SOCKS5_HOST := "10.0.0.4" 
     SOCKS5_PORT := 12346
 
     // TLS证书文件路径
