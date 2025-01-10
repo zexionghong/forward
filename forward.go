@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -32,9 +33,11 @@ type ProxyServer struct {
 	bufferPool       sync.Pool
 	ReadTimeout      time.Duration
 	WriteTimeout     time.Duration
-	connPool         sync.Pool
 	activeConns      sync.Map
 	debug            bool
+	maxIdleConns     int32         // 最大连接数
+	currentConns     int32         // 当前连接数
+	idleTimeout      time.Duration // 空闲连接超时时间
 }
 
 //go:embed cert.pem key.pem server.crt
@@ -87,11 +90,13 @@ func NewProxyServer(localHost string, localPorts []int,
 		logger:           log.Default(),
 		bufferPool: sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 64*1024) // 增加到64KB缓冲区
+				return make([]byte, 64*1024)
 			},
 		},
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
+		maxIdleConns: 500,             // 设置最大连接数为10
+		idleTimeout:  5 * time.Minute, // 设置空闲超时时间
 	}
 	return ps
 }
@@ -119,7 +124,19 @@ func (ps *ProxyServer) detectProtocol(conn net.Conn) (string, []byte, error) {
 }
 
 func (ps *ProxyServer) handleClient(conn net.Conn) {
-	defer conn.Close()
+	newCount := atomic.AddInt32(&ps.currentConns, 1)
+	ps.logger.Printf("新建客户端连接: 当前连接数 %d", newCount)
+
+	defer func() {
+		conn.Close()
+		currentCount := atomic.AddInt32(&ps.currentConns, -1)
+		if currentCount < 0 {
+			ps.logger.Printf("警告：连接数出现负数，重置为0")
+			atomic.StoreInt32(&ps.currentConns, 0)
+		} else {
+			ps.logger.Printf("关闭客户端连接: 当前连接数 %d", currentCount)
+		}
+	}()
 
 	// 设置读写超时
 	if tc, ok := conn.(*net.TCPConn); ok {
@@ -463,6 +480,11 @@ func (ps *ProxyServer) startForwarding(conn1, conn2 net.Conn) {
 
 	copy := func(dst, src net.Conn) {
 		defer wg.Done()
+		defer func() {
+			dst.Close()
+			src.Close()
+		}()
+
 		buf := ps.bufferPool.Get().([]byte)
 		defer ps.bufferPool.Put(buf)
 		io.CopyBuffer(dst, src, buf)
@@ -505,16 +527,11 @@ func (ps *ProxyServer) start() {
 }
 
 func (ps *ProxyServer) dialRemote(network, address string) (net.Conn, error) {
-	// 尝试从连接池获取连接
-	if conn, ok := ps.connPool.Get().(net.Conn); ok {
-		if tcpConn, ok := conn.(*net.TCPConn); ok {
-			// 检查连接是否有效
-			if err := tcpConn.SetDeadline(time.Now()); err == nil {
-				tcpConn.SetDeadline(time.Time{}) // 重置超时
-				return conn, nil
-			}
-			conn.Close()
-		}
+	// 检查是否达到最大连接数
+	currentConns := atomic.LoadInt32(&ps.currentConns)
+	if currentConns >= ps.maxIdleConns {
+		ps.logger.Printf("连接数达到上限: 当前 %d, 最大 %d", currentConns, ps.maxIdleConns)
+		return nil, fmt.Errorf("达到最大连接数限制: %d", ps.maxIdleConns)
 	}
 
 	// 创建新连接
@@ -530,31 +547,21 @@ func (ps *ProxyServer) dialRemote(network, address string) (net.Conn, error) {
 
 	// 记录活动连接
 	ps.activeConns.Store(conn, time.Now())
-
 	return conn, nil
 }
 
-func (ps *ProxyServer) recycleConn(conn net.Conn) {
-	if tc, ok := conn.(*net.TCPConn); ok {
-		tc.SetKeepAlive(true)
-		tc.SetKeepAlivePeriod(30 * time.Second)
-		ps.connPool.Put(conn)
-	} else {
-		conn.Close()
-	}
-}
-
 func (ps *ProxyServer) cleanIdleConns() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(ps.idleTimeout / 2)
 	go func() {
 		for range ticker.C {
 			now := time.Now()
 			ps.activeConns.Range(func(k, v interface{}) bool {
 				conn := k.(net.Conn)
 				lastUsed := v.(time.Time)
-				if now.Sub(lastUsed) > 10*time.Minute {
+				if now.Sub(lastUsed) > ps.idleTimeout {
 					conn.Close()
 					ps.activeConns.Delete(k)
+					atomic.AddInt32(&ps.currentConns, -1)
 				}
 				return true
 			})
@@ -611,7 +618,6 @@ func (ps *ProxyServer) CheckVersion(version string, checkVersionUrl string) {
 		}
 	}
 }
-
 func main() {
 	// 配置日志
 	logger := log.New(io.MultiWriter(log.Writer()), "", log.LstdFlags)
