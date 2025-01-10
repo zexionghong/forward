@@ -34,6 +34,7 @@ type ProxyServer struct {
 	WriteTimeout     time.Duration
 	connPool         sync.Pool
 	activeConns      sync.Map
+	debug            bool
 }
 
 //go:embed cert.pem key.pem server.crt
@@ -95,6 +96,12 @@ func NewProxyServer(localHost string, localPorts []int,
 	return ps
 }
 
+func (ps *ProxyServer) logDebug(format string, v ...interface{}) {
+	if ps.debug {
+		ps.logger.Printf(format, v...)
+	}
+}
+
 func (ps *ProxyServer) detectProtocol(conn net.Conn) (string, []byte, error) {
 	buf := make([]byte, 1)
 	_, err := conn.Read(buf)
@@ -124,7 +131,7 @@ func (ps *ProxyServer) handleClient(conn net.Conn) {
 
 	protocol, firstByte, err := ps.detectProtocol(conn)
 	if err != nil {
-		ps.logger.Printf("协议检测错误: %v", err)
+		ps.logDebug("协议检测错误: %v", err)
 		return
 	}
 
@@ -134,7 +141,7 @@ func (ps *ProxyServer) handleClient(conn net.Conn) {
 	case "http":
 		ps.handleHTTP(conn, firstByte)
 	default:
-		ps.logger.Println("未知协议，关闭连接")
+		ps.logDebug("未知协议，关闭连接")
 	}
 }
 
@@ -145,13 +152,13 @@ func (ps *ProxyServer) handleHTTP(clientConn net.Conn, firstByte []byte) {
 	// 读取请求头
 	requestData, err := ps.readHTTPRequest(firstByte, reader)
 	if err != nil {
-		ps.logger.Printf("读取 HTTP 请求错误: %v", err)
+		ps.logDebug("读取 HTTP 请求错误: %v", err)
 		return
 	}
 
 	username, password := ps.extractAuth(requestData)
 	if username == "" || password == "" {
-		ps.logger.Println("HTTP 认证失败")
+		ps.logDebug("HTTP 认证失败")
 		response := "HTTP/1.1 407 Proxy Authentication Required\r\n"
 		response += "Proxy-Authenticate: Basic realm=\"Proxy\"\r\n\r\n"
 		clientConn.Write([]byte(response))
@@ -160,7 +167,7 @@ func (ps *ProxyServer) handleHTTP(clientConn net.Conn, firstByte []byte) {
 
 	remoteConn, err := ps.dialRemote("tcp", fmt.Sprintf("%s:%d", ps.RemoteHTTPHost, ps.RemoteHTTPPort))
 	if err != nil {
-		ps.logger.Printf("连接远程 HTTP 代理错误")
+		ps.logDebug("连接远程 HTTP 代理错误")
 		return
 	}
 	defer remoteConn.Close()
@@ -178,7 +185,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 	nmethodsByte := make([]byte, 1)
 	_, err := io.ReadFull(reader, nmethodsByte)
 	if err != nil {
-		ps.logger.Printf("读取 nmethods 错误")
+		ps.logDebug("读取 nmethods 错误")
 		return
 	}
 	nmethods := int(nmethodsByte[0])
@@ -187,14 +194,14 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 	methods := make([]byte, nmethods)
 	_, err = io.ReadFull(reader, methods)
 	if err != nil {
-		ps.logger.Printf("读取 methods 错误")
+		ps.logDebug("读取 methods 错误")
 		return
 	}
 
 	// 连接到远程 SOCKS5 服务器
 	remoteConn, err := ps.dialRemote("tcp", fmt.Sprintf("%s:%d", ps.RemoteSOCKS5Host, ps.RemoteSOCKS5Port))
 	if err != nil {
-		ps.logger.Printf("连接远程 SOCKS5 代理错误")
+		ps.logDebug("连接远程 SOCKS5 代理错误")
 		return
 	}
 	defer remoteConn.Close()
@@ -207,7 +214,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 	authResponse := make([]byte, 2)
 	_, err = io.ReadFull(remoteConn, authResponse)
 	if err != nil {
-		ps.logger.Printf("读取远程 SOCKS5 握手响应错误")
+		ps.logDebug("读取远程 SOCKS5 握手响应错误")
 		return
 	}
 
@@ -216,13 +223,13 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 
 	if authResponse[1] == 0x02 {
 		// 用户名/密码认证
-		ps.logger.Println("SOCKS5 开始用户认证")
+		ps.logDebug("SOCKS5 开始用户认证")
 
 		// 读取客户端的认证请求
 		authVerAndUlen := make([]byte, 2)
 		_, err = io.ReadFull(reader, authVerAndUlen)
 		if err != nil {
-			ps.logger.Printf("读取认证请求头错误: %v", err)
+			ps.logDebug("读取认证请求头错误: %v", err)
 			return
 		}
 		ulen := int(authVerAndUlen[1])
@@ -230,14 +237,14 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		username := make([]byte, ulen)
 		_, err = io.ReadFull(reader, username)
 		if err != nil {
-			ps.logger.Printf("读取用户名错误: %v", err)
+			ps.logDebug("读取用户名错误: %v", err)
 			return
 		}
 
 		plenByte := make([]byte, 1)
 		_, err = io.ReadFull(reader, plenByte)
 		if err != nil {
-			ps.logger.Printf("读取密码长度错误: %v", err)
+			ps.logDebug("读取密码长度错误: %v", err)
 			return
 		}
 		plen := int(plenByte[0])
@@ -245,7 +252,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		password := make([]byte, plen)
 		_, err = io.ReadFull(reader, password)
 		if err != nil {
-			ps.logger.Printf("读取密码错误: %v", err)
+			ps.logDebug("读取密码错误: %v", err)
 			return
 		}
 
@@ -259,7 +266,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		authResult := make([]byte, 2)
 		_, err = io.ReadFull(remoteConn, authResult)
 		if err != nil {
-			ps.logger.Printf("读取认证响应错误")
+			ps.logDebug("读取认证响应错误")
 			return
 		}
 
@@ -267,13 +274,13 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		clientConn.Write(authResult)
 
 		if authResult[1] == 0x00 {
-			ps.logger.Println("SOCKS5 认证成功")
+			ps.logDebug("SOCKS5 认证成功")
 		} else {
-			ps.logger.Println("SOCKS5 认证失败")
+			ps.logDebug("SOCKS5 认证失败")
 			return
 		}
 	} else if authResponse[1] != 0x00 {
-		ps.logger.Printf("服务器不支持的认证方法")
+		ps.logDebug("服务器不支持的认证方法")
 		return
 	}
 
@@ -282,7 +289,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 	connReqHeader := make([]byte, 4)
 	_, err = io.ReadFull(reader, connReqHeader)
 	if err != nil {
-		ps.logger.Printf("读取连接请求头错误")
+		ps.logDebug("读取连接请求头错误")
 		return
 	}
 
@@ -298,7 +305,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		addr = make([]byte, 4)
 		_, err = io.ReadFull(reader, addr)
 		if err != nil {
-			ps.logger.Printf("读取 IPv4 地址错误")
+			ps.logDebug("读取 IPv4 地址错误")
 			return
 		}
 	case 0x03:
@@ -306,7 +313,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		addrLenByte := make([]byte, 1)
 		_, err = io.ReadFull(reader, addrLenByte)
 		if err != nil {
-			ps.logger.Printf("读取域名长度错误")
+			ps.logDebug("读取域名长度错误")
 			return
 		}
 		addrLen := int(addrLenByte[0])
@@ -314,7 +321,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		domainName := make([]byte, addrLen)
 		_, err = io.ReadFull(reader, domainName)
 		if err != nil {
-			ps.logger.Printf("读取域名错误")
+			ps.logDebug("读取域名错误")
 			return
 		}
 
@@ -324,11 +331,11 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		addr = make([]byte, 16)
 		_, err = io.ReadFull(reader, addr)
 		if err != nil {
-			ps.logger.Printf("读取 IPv6 地址错误")
+			ps.logDebug("读取 IPv6 地址错误")
 			return
 		}
 	default:
-		ps.logger.Printf("未知的 ATYP 值")
+		ps.logDebug("未知的 ATYP 值")
 		return
 	}
 
@@ -336,7 +343,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 	port := make([]byte, 2)
 	_, err = io.ReadFull(reader, port)
 	if err != nil {
-		ps.logger.Printf("读取端口错误")
+		ps.logDebug("读取端口错误")
 		return
 	}
 
@@ -348,7 +355,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 	serverRespHeader := make([]byte, 4)
 	_, err = io.ReadFull(remoteConn, serverRespHeader)
 	if err != nil {
-		ps.logger.Printf("读取服务器响应头错误")
+		ps.logDebug("读取服务器响应头错误")
 		return
 	}
 
@@ -356,7 +363,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 	clientConn.Write(serverRespHeader)
 
 	if serverRespHeader[1] != 0x00 {
-		ps.logger.Printf("SOCKS5 连接失败")
+		ps.logDebug("SOCKS5 连接失败")
 		return
 	}
 
@@ -371,20 +378,20 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		addrLenByte := make([]byte, 1)
 		_, err = io.ReadFull(remoteConn, addrLenByte)
 		if err != nil {
-			ps.logger.Printf("读取绑定地址长度错误: %v", err)
+			ps.logDebug("读取绑定地址长度错误: %v", err)
 			return
 		}
 		addrLen := int(addrLenByte[0])
 		domainName := make([]byte, addrLen)
 		_, err = io.ReadFull(remoteConn, domainName)
 		if err != nil {
-			ps.logger.Printf("读取绑定域名错误: %v", err)
+			ps.logDebug("读取绑定域名错误: %v", err)
 			return
 		}
 		port := make([]byte, 2)
 		_, err = io.ReadFull(remoteConn, port)
 		if err != nil {
-			ps.logger.Printf("读取绑定端口错误: %v", err)
+			ps.logDebug("读取绑定端口错误: %v", err)
 			return
 		}
 		bndAddr = append(addrLenByte, domainName...)
@@ -393,21 +400,21 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 		// IPv6 地址，16 字节 + 2 字节端口
 		bndAddr = make([]byte, 18)
 	default:
-		ps.logger.Printf("未知的 BND.ATYP 值")
+		ps.logDebug("未知的 BND.ATYP 值")
 		return
 	}
 
 	// 从远程服务器读取 BND.ADDR 和 BND.PORT
 	_, err = io.ReadFull(remoteConn, bndAddr)
 	if err != nil {
-		ps.logger.Printf("读取绑定地址错误")
+		ps.logDebug("读取绑定地址错误")
 		return
 	}
 
 	// 将 BND.ADDR 和 BND.PORT 发回客户端
 	clientConn.Write(bndAddr)
 
-	ps.logger.Println("SOCKS5 连接成功，开始数据转发")
+	ps.logDebug("SOCKS5 连接成功，开始数据转发")
 
 	ps.startForwarding(clientConn, remoteConn)
 }
@@ -485,7 +492,7 @@ func (ps *ProxyServer) start() {
 			for {
 				conn, err := listener.Accept()
 				if err != nil {
-					ps.logger.Printf("接受连接失败")
+					ps.logDebug("接受连接失败")
 					continue
 				}
 
@@ -631,6 +638,9 @@ func main() {
 		REMOTE_SOCKS_HOST, REMOTE_SOCKS_PORT,
 		"cert.pem", "key.pem")
 
+	proxy.debug = false // 设置为 false 关闭调试日志
+	proxy.logger = logger
+
 	// 启动连接清理
 	proxy.cleanIdleConns()
 
@@ -638,6 +648,6 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	proxy.CheckVersion(version, checkVersionUrl)
-	proxy.logger = logger
+
 	proxy.start()
 }
