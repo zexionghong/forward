@@ -125,16 +125,16 @@ func (ps *ProxyServer) detectProtocol(conn net.Conn) (string, []byte, error) {
 
 func (ps *ProxyServer) handleClient(conn net.Conn) {
 	newCount := atomic.AddInt32(&ps.currentConns, 1)
-	ps.logger.Printf("新建客户端连接: 当前连接数 %d", newCount)
+	ps.logDebug("新建客户端连接: 当前连接数 %d", newCount)
 
 	defer func() {
 		conn.Close()
 		currentCount := atomic.AddInt32(&ps.currentConns, -1)
 		if currentCount < 0 {
-			ps.logger.Printf("警告：连接数出现负数，重置为0")
+			ps.logDebug("警告：连接数出现负数，重置为0")
 			atomic.StoreInt32(&ps.currentConns, 0)
 		} else {
-			ps.logger.Printf("关闭客户端连接: 当前连接数 %d", currentCount)
+			ps.logDebug("关闭客户端连接: 当前连接数 %d", currentCount)
 		}
 	}()
 
