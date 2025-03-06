@@ -218,7 +218,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 	// 连接到远程 SOCKS5 服务器
 	remoteConn, err := ps.dialRemote("tcp", fmt.Sprintf("%s:%d", ps.RemoteSOCKS5Host, ps.RemoteSOCKS5Port))
 	if err != nil {
-		ps.logDebug("连接远程 SOCKS5 代理错误")
+		ps.logDebug("连接远程 SOCKS5 代理错误 ：%v", err)
 		return
 	}
 	defer remoteConn.Close()
@@ -231,7 +231,7 @@ func (ps *ProxyServer) handleSOCKS5(clientConn net.Conn, firstByte []byte) {
 	authResponse := make([]byte, 2)
 	_, err = io.ReadFull(remoteConn, authResponse)
 	if err != nil {
-		ps.logDebug("读取远程 SOCKS5 握手响应错误")
+		ps.logDebug("读取远程 SOCKS5 握手响应错误 ：%v", err)
 		return
 	}
 
@@ -627,10 +627,10 @@ func main() {
 	LOCAL_PORTS := []int{12345, 12346} // 定义多个本地端口
 
 	REMOTE_HTTP_HOST := "ipflex.ink"
-	REMOTE_HTTP_PORT := 12345
+	REMOTE_HTTP_PORT := 12347
 
 	REMOTE_SOCKS_HOST := "ipflex.ink"
-	REMOTE_SOCKS_PORT := 12346
+	REMOTE_SOCKS_PORT := 12348
 
 	fmt.Println(" ______________________________________________________________________ ")
 	fmt.Println("|                                                                      |")
@@ -644,7 +644,7 @@ func main() {
 		REMOTE_SOCKS_HOST, REMOTE_SOCKS_PORT,
 		"cert.pem", "key.pem")
 
-	proxy.debug = false // 设置为 false 关闭调试日志
+	proxy.debug = true // 设置为 false 关闭调试日志
 	proxy.logger = logger
 
 	// 启动连接清理

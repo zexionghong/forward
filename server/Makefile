@@ -4,7 +4,7 @@
 BINARY_NAME=ipflex
 VERSION=1.0.0
 BUILD_DIR=dist
-MAIN_FILE=forward/forward.go
+MAIN_FILE=forward.go
 
 # 通用编译参数
 GO=go
