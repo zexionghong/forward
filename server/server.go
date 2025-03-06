@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/tls"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -20,23 +19,32 @@ type ProxyServer struct {
 	logger          *log.Logger
 	localHTTPPort   int
 	localSocks5Port int
+	Username        string
+	Password        string
 }
 
 // SOCKS5 协议常量
 const (
 	SOCKS5_VERSION = 0x05
 	NO_AUTH        = 0x00
+	USER_PASS_AUTH = 0x02
 	NO_ACCEPTABLE  = 0xFF
 	CONNECT        = 0x01
 	IPV4           = 0x01
 	DOMAIN         = 0x03
 	IPV6           = 0x04
+
+	// 用户名密码认证版本
+	USER_PASS_VERSION = 0x01
+	AUTH_SUCCESS      = 0x00
+	AUTH_FAILURE      = 0x01
 )
 
 func NewProxyServer(httpHost string, httpPort int,
 	socks5Host string, socks5Port int,
 	certFile, keyFile string,
-	localHTTPPort int, localSocks5Port int) *ProxyServer {
+	localHTTPPort int, localSocks5Port int,
+	username, password string) *ProxyServer {
 
 	// 加载TLS证书
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -58,6 +66,8 @@ func NewProxyServer(httpHost string, httpPort int,
 		logger:          log.Default(),
 		localHTTPPort:   localHTTPPort,
 		localSocks5Port: localSocks5Port,
+		Username:        username,
+		Password:        password,
 	}
 }
 
@@ -82,35 +92,53 @@ func (ps *ProxyServer) handleSOCKS5Proxy(conn net.Conn) {
 
 	ps.logger.Printf("收到新的SOCKS5代理请求: %s", conn.RemoteAddr().String())
 
-	// 1. 版本识别和方法选择
+	// 1. 与客户端完成握手认证
 	if err := ps.handleHandshake(conn); err != nil {
 		ps.logger.Printf("SOCKS5握手失败: %v", err)
 		return
 	}
 
-	// 2. 处理客户端请求
-	targetAddr, err := ps.handleRequest(conn)
+	// 2. 连接到远程SOCKS5服务器
+	targetConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", ps.SOCKS5Host, ps.SOCKS5Port))
 	if err != nil {
-		ps.logger.Printf("处理SOCKS5请求失败: %v", err)
-		return
-	}
-
-	// 3. 建立到目标服务器的连接
-	targetConn, err := net.Dial("tcp", targetAddr)
-	if err != nil {
-		ps.logger.Printf("连接目标服务器失败: %v", err)
-		ps.sendReply(conn, 0x04) // Host unreachable
+		ps.logger.Printf("连接远程SOCKS5服务器失败: %v", err)
 		return
 	}
 	defer targetConn.Close()
 
-	// 4. 发送成功响应
-	if err := ps.sendReply(conn, 0x00); err != nil {
-		ps.logger.Printf("发送SOCKS5响应失败: %v", err)
+	// 3. 与远程SOCKS5服务器完成握手认证
+	if err := ps.handleRemoteHandshake(targetConn); err != nil {
+		ps.logger.Printf("与远程SOCKS5服务器握手失败: %v", err)
 		return
 	}
 
-	// 5. 开始数据转发
+	// 4. 读取客户端请求
+	request, err := ps.readClientRequest(conn)
+	if err != nil {
+		ps.logger.Printf("读取客户端请求失败: %v", err)
+		return
+	}
+
+	// 5. 转发请求到远程SOCKS5服务器
+	if _, err := targetConn.Write(request); err != nil {
+		ps.logger.Printf("转发请求到远程服务器失败: %v", err)
+		return
+	}
+
+	// 6. 读取远程服务器响应
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(targetConn, reply); err != nil {
+		ps.logger.Printf("读取远程服务器响应失败: %v", err)
+		return
+	}
+
+	// 7. 将响应转发给客户端
+	if _, err := conn.Write(reply); err != nil {
+		ps.logger.Printf("发送响应给客户端失败: %v", err)
+		return
+	}
+
+	// 8. 开始双向数据转发
 	ps.startForwarding(conn, targetConn)
 }
 
@@ -120,6 +148,8 @@ func (ps *ProxyServer) handleHandshake(conn net.Conn) error {
 	if _, err := io.ReadFull(conn, header); err != nil {
 		return err
 	}
+
+	ps.logger.Printf("SOCKS5握手 - 版本: %d, 方法数量: %d", header[0], header[1])
 
 	if header[0] != SOCKS5_VERSION {
 		return errors.New("不支持的SOCKS版本")
@@ -131,7 +161,9 @@ func (ps *ProxyServer) handleHandshake(conn net.Conn) error {
 		return err
 	}
 
-	// 检查是否支持无认证方式
+	ps.logger.Printf("客户端支持的认证方法: %v", methods)
+
+	// 检查认证方法
 	hasNoAuth := false
 	for _, method := range methods {
 		if method == NO_AUTH {
@@ -140,91 +172,111 @@ func (ps *ProxyServer) handleHandshake(conn net.Conn) error {
 		}
 	}
 
-	// 发送认证方法选择响应
-	response := []byte{SOCKS5_VERSION, NO_AUTH}
 	if !hasNoAuth {
-		response[1] = NO_ACCEPTABLE
+		return errors.New("客户端必须支持无认证方法")
 	}
 
+	// 与客户端使用无认证方法
+	response := []byte{SOCKS5_VERSION, NO_AUTH}
 	if _, err := conn.Write(response); err != nil {
 		return err
 	}
 
-	if !hasNoAuth {
-		return errors.New("没有可接受的认证方法")
-	}
-
+	ps.logger.Printf("发送认证方法选择响应: 版本=%d, 方法=%d", response[0], response[1])
 	return nil
 }
 
-func (ps *ProxyServer) handleRequest(conn net.Conn) (string, error) {
+func (ps *ProxyServer) handleRemoteHandshake(conn net.Conn) error {
+	// 发送握手请求到远程SOCKS5服务器，只提供用户名密码认证方法
+	methods := []byte{
+		SOCKS5_VERSION,
+		1,               // 1个认证方法
+		USER_PASS_AUTH, // 只使用用户名密码认证
+	}
+	
+	if _, err := conn.Write(methods); err != nil {
+		return fmt.Errorf("发送握手请求失败: %v", err)
+	}
+
+	// 读取响应
+	response := make([]byte, 2)
+	if _, err := io.ReadFull(conn, response); err != nil {
+		return fmt.Errorf("读取握手响应失败: %v", err)
+	}
+
+	if response[0] != SOCKS5_VERSION {
+		return errors.New("远程服务器SOCKS5版本不匹配")
+	}
+
+	if response[1] != USER_PASS_AUTH {
+		return errors.New("远程服务器不接受用户名密码认证")
+	}
+
+	// 发送用户名密码认证
+	auth := []byte{USER_PASS_VERSION}
+	auth = append(auth, byte(len(ps.Username)))
+	auth = append(auth, []byte(ps.Username)...)
+	auth = append(auth, byte(len(ps.Password)))
+	auth = append(auth, []byte(ps.Password)...)
+
+	ps.logger.Printf("向远程服务器发送认证 - 用户名: '%s', 密码: '%s'", ps.Username, ps.Password)
+
+	if _, err := conn.Write(auth); err != nil {
+		return fmt.Errorf("发送用户名密码认证失败: %v", err)
+	}
+
+	// 读取认证响应
+	authResponse := make([]byte, 2)
+	if _, err := io.ReadFull(conn, authResponse); err != nil {
+		return fmt.Errorf("读取认证响应失败: %v", err)
+	}
+
+	if authResponse[0] != USER_PASS_VERSION || authResponse[1] != AUTH_SUCCESS {
+		return errors.New("远程服务器认证失败")
+	}
+
+	ps.logger.Printf("远程服务器认证成功")
+	return nil
+}
+
+func (ps *ProxyServer) readClientRequest(conn net.Conn) ([]byte, error) {
 	// 读取请求头
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(conn, header); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if header[0] != SOCKS5_VERSION {
-		return "", errors.New("无效的SOCKS5请求")
+		return nil, errors.New("无效的SOCKS5请求")
 	}
 
-	if header[1] != CONNECT {
-		return "", errors.New("仅支持CONNECT命令")
-	}
-
-	// 解析目标地址
-	var targetAddr string
+	// 根据地址类型读取剩余数据
+	var remainingBytes int
 	switch header[3] {
 	case IPV4:
-		addr := make([]byte, 4)
-		if _, err := io.ReadFull(conn, addr); err != nil {
-			return "", err
-		}
-		targetAddr = net.IP(addr).String()
-
+		remainingBytes = 4 + 2 // IPv4(4) + Port(2)
+	case IPV6:
+		remainingBytes = 16 + 2 // IPv6(16) + Port(2)
 	case DOMAIN:
 		domainLen := make([]byte, 1)
 		if _, err := io.ReadFull(conn, domainLen); err != nil {
-			return "", err
+			return nil, err
 		}
-		domain := make([]byte, domainLen[0])
-		if _, err := io.ReadFull(conn, domain); err != nil {
-			return "", err
-		}
-		targetAddr = string(domain)
-
-	case IPV6:
-		addr := make([]byte, 16)
-		if _, err := io.ReadFull(conn, addr); err != nil {
-			return "", err
-		}
-		targetAddr = net.IP(addr).String()
-
+		remainingBytes = int(domainLen[0]) + 2 // Domain + Port(2)
+		header = append(header, domainLen[0])
 	default:
-		return "", errors.New("不支持的地址类型")
+		return nil, errors.New("不支持的地址类型")
 	}
 
-	// 读取端口
-	portBytes := make([]byte, 2)
-	if _, err := io.ReadFull(conn, portBytes); err != nil {
-		return "", err
+	// 读取剩余数据
+	remaining := make([]byte, remainingBytes)
+	if _, err := io.ReadFull(conn, remaining); err != nil {
+		return nil, err
 	}
-	port := binary.BigEndian.Uint16(portBytes)
 
-	return fmt.Sprintf("%s:%d", targetAddr, port), nil
-}
-
-func (ps *ProxyServer) sendReply(conn net.Conn, replyCode byte) error {
-	reply := []byte{
-		SOCKS5_VERSION, // 版本
-		replyCode,      // 响应码
-		0x00,           // 保留字段
-		0x01,           // IPv4地址类型
-		0, 0, 0, 0,     // 绑定地址
-		0, 0, // 绑定端口
-	}
-	_, err := conn.Write(reply)
-	return err
+	// 合并完整请求
+	request := append(header, remaining...)
+	return request, nil
 }
 
 func (ps *ProxyServer) startForwarding(conn1, conn2 net.Conn) {
@@ -301,12 +353,17 @@ func main() {
 	CERT_FILE := "server.crt"
 	KEY_FILE := "server.key"
 
+	// 设置远程SOCKS5服务器的认证信息
+	REMOTE_USERNAME := "afiL3jfPEGis"
+	REMOTE_PASSWORD := "Z6b6uUeo"
+
 	logger.Printf("初始化代理服务器...")
 	server := NewProxyServer(
 		REMOTE_HTTP_HOST, REMOTE_HTTP_PORT,
 		REMOTE_SOCKS5_HOST, REMOTE_SOCKS5_PORT,
 		CERT_FILE, KEY_FILE,
-		LOCAL_HTTP_PORT, LOCAL_SOCKS5_PORT)
+		LOCAL_HTTP_PORT, LOCAL_SOCKS5_PORT,
+		REMOTE_USERNAME, REMOTE_PASSWORD) // 使用远程服务器的认证信息
 
 	server.logger = logger
 	server.Start()
