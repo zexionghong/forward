@@ -74,7 +74,6 @@ func NewProxyServer(httpHost string, httpPort int,
 func (ps *ProxyServer) handleHTTPProxy(conn net.Conn) {
 	defer conn.Close()
 
-	ps.logger.Printf("收到新的HTTP代理请求: %s", conn.RemoteAddr().String())
 
 	targetConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", ps.HTTPHost, ps.HTTPPort))
 	if err != nil {
@@ -83,14 +82,12 @@ func (ps *ProxyServer) handleHTTPProxy(conn net.Conn) {
 	}
 	defer targetConn.Close()
 
-	ps.logger.Printf("成功连接到HTTP目标服务器: %s:%d", ps.HTTPHost, ps.HTTPPort)
 	ps.startForwarding(conn, targetConn)
 }
 
 func (ps *ProxyServer) handleSOCKS5Proxy(conn net.Conn) {
 	defer conn.Close()
 
-	ps.logger.Printf("收到新的SOCKS5代理请求: %s", conn.RemoteAddr().String())
 
 	// 1. 与客户端完成握手认证
 	if err := ps.handleHandshake(conn); err != nil {
@@ -149,7 +146,6 @@ func (ps *ProxyServer) handleHandshake(conn net.Conn) error {
 		return err
 	}
 
-	ps.logger.Printf("SOCKS5握手 - 版本: %d, 方法数量: %d", header[0], header[1])
 
 	if header[0] != SOCKS5_VERSION {
 		return errors.New("不支持的SOCKS版本")
@@ -161,7 +157,6 @@ func (ps *ProxyServer) handleHandshake(conn net.Conn) error {
 		return err
 	}
 
-	ps.logger.Printf("客户端支持的认证方法: %v", methods)
 
 	// 检查认证方法
 	hasNoAuth := false
@@ -182,7 +177,6 @@ func (ps *ProxyServer) handleHandshake(conn net.Conn) error {
 		return err
 	}
 
-	ps.logger.Printf("发送认证方法选择响应: 版本=%d, 方法=%d", response[0], response[1])
 	return nil
 }
 
@@ -219,7 +213,6 @@ func (ps *ProxyServer) handleRemoteHandshake(conn net.Conn) error {
 	auth = append(auth, byte(len(ps.Password)))
 	auth = append(auth, []byte(ps.Password)...)
 
-	ps.logger.Printf("向远程服务器发送认证 - 用户名: '%s', 密码: '%s'", ps.Username, ps.Password)
 
 	if _, err := conn.Write(auth); err != nil {
 		return fmt.Errorf("发送用户名密码认证失败: %v", err)
@@ -235,7 +228,6 @@ func (ps *ProxyServer) handleRemoteHandshake(conn net.Conn) error {
 		return errors.New("远程服务器认证失败")
 	}
 
-	ps.logger.Printf("远程服务器认证成功")
 	return nil
 }
 
@@ -289,15 +281,12 @@ func (ps *ProxyServer) startForwarding(conn1, conn2 net.Conn) {
 		if err != nil {
 			ps.logger.Printf("数据转发错误: %v", err)
 		}
-		ps.logger.Printf("转发完成 %d 字节数据", written)
 	}
 
-	ps.logger.Printf("开始双向数据转发")
 	go copy(conn1, conn2)
 	go copy(conn2, conn1)
 
 	wg.Wait()
-	ps.logger.Printf("数据转发结束")
 }
 
 func (ps *ProxyServer) Start() {
