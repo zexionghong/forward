@@ -277,7 +277,7 @@ func (ps *ProxyServer) startForwarding(conn1, conn2 net.Conn) {
 
 	copy := func(dst, src net.Conn) {
 		defer wg.Done()
-		written, err := io.Copy(dst, src)
+		_, err := io.Copy(dst, src)
 		if err != nil {
 			ps.logger.Printf("数据转发错误: %v", err)
 		}
