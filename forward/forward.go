@@ -644,8 +644,29 @@ func main() {
 		REMOTE_SOCKS_HOST, REMOTE_SOCKS_PORT,
 		"cert.pem", "key.pem")
 
-	proxy.debug = true // 设置为 false 关闭调试日志
+	proxy.debug = false // 设置为 false 关闭调试日志
 	proxy.logger = logger
+
+	// 启动HTTP服务器
+	go func() {
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// 添加CORS头部
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "*")
+
+			// 处理OPTIONS预检请求
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+
+			w.Write([]byte("ok"))
+		})
+		if err := http.ListenAndServe(":12340", nil); err != nil {
+			logger.Printf("HTTP服务器启动失败: %v", err)
+		}
+	}()
 
 	// 启动连接清理
 	proxy.cleanIdleConns()
