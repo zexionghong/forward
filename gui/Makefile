@@ -28,8 +28,8 @@ run: build
 # 跨平台构建
 windows: deps
 	@echo "构建Windows版本..."
-	GOOS=windows GOARCH=amd64 go build -o bin/$(APP_NAME)-windows-amd64.exe .
-	GOOS=windows GOARCH=386 go build -o bin/$(APP_NAME)-windows-386.exe .
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go build -o bin/$(APP_NAME)-windows-amd64.exe .
+	GOOS=windows GOARCH=386 CGO_ENABLED=1 CC=i686-w64-mingw32-gcc go build -o bin/$(APP_NAME)-windows-386.exe .
 
 linux: deps
 	@echo "构建Linux版本..."

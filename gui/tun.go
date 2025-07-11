@@ -5,13 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/netip"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/songgao/water"
 	"github.com/songgao/water/waterutil"
@@ -320,11 +317,15 @@ func (t *TUNProxy) handleTCPPacket(packet []byte, dst net.IP) {
 	srcPort := waterutil.IPv4SourcePort(packet)
 	dstPort := waterutil.IPv4DestinationPort(packet)
 
-	if waterutil.IsTCPSyn(packet) && !waterutil.IsTCPAck(packet) {
-		t.logger.Printf("拦截TCP连接: %s:%d -> %s:%d", 
-			waterutil.IPv4Source(packet), srcPort, dst, dstPort)
+	// 检查是否为TCP协议且为新连接
+	if waterutil.IPv4Protocol(packet) == waterutil.TCP {
+		// 简单的TCP包处理，检查目标端口
+		if dstPort == 80 || dstPort == 443 || dstPort == 8080 {
+			t.logger.Printf("拦截TCP连接: %s:%d -> %s:%d", 
+				waterutil.IPv4Source(packet), srcPort, dst, dstPort)
 
-		go t.proxyTCPConnection(dst, dstPort)
+			go t.proxyTCPConnection(dst, dstPort)
+		}
 	}
 }
 
