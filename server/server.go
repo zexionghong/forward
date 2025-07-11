@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 )
 
@@ -19,8 +22,11 @@ type ProxyServer struct {
 	logger          *log.Logger
 	localHTTPPort   int
 	localSocks5Port int
-	Username        string
-	Password        string
+	Username        string // 默认用户名（仅作为后备）
+	Password        string // 默认密码（仅作为后备）
+	clientUsername  string // 保存客户端SOCKS5用户名
+	clientPassword  string // 保存客户端SOCKS5密码
+	clientIP        string // 保存客户端IP地址
 }
 
 // SOCKS5 协议常量
@@ -74,6 +80,9 @@ func NewProxyServer(httpHost string, httpPort int,
 func (ps *ProxyServer) handleHTTPProxy(conn net.Conn) {
 	defer conn.Close()
 
+	// 获取客户端IP地址
+	clientIP := conn.RemoteAddr().(*net.TCPAddr).IP.String()
+	ps.clientIP = clientIP
 
 	targetConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", ps.HTTPHost, ps.HTTPPort))
 	if err != nil {
@@ -82,12 +91,57 @@ func (ps *ProxyServer) handleHTTPProxy(conn net.Conn) {
 	}
 	defer targetConn.Close()
 
+	// 读取HTTP请求头
+	reader := bufio.NewReader(conn)
+	request, err := reader.ReadString('\n')
+	if err != nil {
+		ps.logger.Printf("读取HTTP请求失败: %v", err)
+		return
+	}
+
+	// 如果请求中包含Proxy-Authorization头，提取用户名
+	username := ps.Username // 默认使用配置的用户名
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil || line == "\r\n" {
+			break
+		}
+		if strings.HasPrefix(strings.ToLower(line), "proxy-authorization:") {
+			auth := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(line), "proxy-authorization:"))
+			if strings.HasPrefix(auth, "basic ") {
+				decoded, err := base64.StdEncoding.DecodeString(auth[6:])
+				if err == nil {
+					parts := strings.SplitN(string(decoded), ":", 2)
+					if len(parts) == 2 {
+						username = parts[0]
+					}
+				}
+			}
+		}
+	}
+
+	// 构造新的认证头
+	newAuth := fmt.Sprintf("%s,%s", clientIP, username)
+	authHeader := fmt.Sprintf("Proxy-Authorization: Basic %s\r\n",
+		base64.StdEncoding.EncodeToString([]byte(newAuth+":"+ps.Password)))
+
+	// 重新构造请求
+	newRequest := request
+	if !strings.Contains(strings.ToLower(request), "proxy-authorization:") {
+		newRequest = strings.TrimRight(request, "\r\n") + "\r\n" + authHeader
+	}
+
+	// 发送修改后的请求
+	if _, err := targetConn.Write([]byte(newRequest)); err != nil {
+		ps.logger.Printf("发送HTTP请求失败: %v", err)
+		return
+	}
+
 	ps.startForwarding(conn, targetConn)
 }
 
 func (ps *ProxyServer) handleSOCKS5Proxy(conn net.Conn) {
 	defer conn.Close()
-
 
 	// 1. 与客户端完成握手认证
 	if err := ps.handleHandshake(conn); err != nil {
@@ -146,7 +200,6 @@ func (ps *ProxyServer) handleHandshake(conn net.Conn) error {
 		return err
 	}
 
-
 	if header[0] != SOCKS5_VERSION {
 		return errors.New("不支持的SOCKS版本")
 	}
@@ -157,8 +210,65 @@ func (ps *ProxyServer) handleHandshake(conn net.Conn) error {
 		return err
 	}
 
+	// 检查支持的认证方法
+	var useUserPassAuth bool
+	for _, method := range methods {
+		if method == USER_PASS_AUTH {
+			useUserPassAuth = true
+			break
+		}
+	}
 
-	// 检查认证方法
+	// 如果客户端支持用户名/密码认证，选择此方法
+	if useUserPassAuth {
+		// 告诉客户端使用用户名/密码认证
+		response := []byte{SOCKS5_VERSION, USER_PASS_AUTH}
+		if _, err := conn.Write(response); err != nil {
+			return err
+		}
+
+		// 读取认证信息
+		authHeader := make([]byte, 2)
+		if _, err := io.ReadFull(conn, authHeader); err != nil {
+			return err
+		}
+
+		if authHeader[0] != USER_PASS_VERSION {
+			return errors.New("不支持的用户名/密码认证版本")
+		}
+
+		// 读取用户名
+		userLen := int(authHeader[1])
+		username := make([]byte, userLen)
+		if _, err := io.ReadFull(conn, username); err != nil {
+			return err
+		}
+
+		// 读取密码
+		passLenBuf := make([]byte, 1)
+		if _, err := io.ReadFull(conn, passLenBuf); err != nil {
+			return err
+		}
+		passLen := int(passLenBuf[0])
+		password := make([]byte, passLen)
+		if _, err := io.ReadFull(conn, password); err != nil {
+			return err
+		}
+
+		// 保存客户端的用户名和密码以便后续使用
+		ps.clientUsername = string(username)
+		ps.clientPassword = string(password)
+
+		// 简单认证（这里可以实现实际的认证逻辑）
+		authResponse := []byte{USER_PASS_VERSION, AUTH_SUCCESS}
+		if _, err := conn.Write(authResponse); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	// 检查是否支持无认证方法
 	hasNoAuth := false
 	for _, method := range methods {
 		if method == NO_AUTH {
@@ -168,7 +278,7 @@ func (ps *ProxyServer) handleHandshake(conn net.Conn) error {
 	}
 
 	if !hasNoAuth {
-		return errors.New("客户端必须支持无认证方法")
+		return errors.New("客户端必须支持无认证方法或用户名/密码认证")
 	}
 
 	// 与客户端使用无认证方法
@@ -184,10 +294,10 @@ func (ps *ProxyServer) handleRemoteHandshake(conn net.Conn) error {
 	// 发送握手请求到远程SOCKS5服务器，只提供用户名密码认证方法
 	methods := []byte{
 		SOCKS5_VERSION,
-		1,               // 1个认证方法
+		1,              // 1个认证方法
 		USER_PASS_AUTH, // 只使用用户名密码认证
 	}
-	
+
 	if _, err := conn.Write(methods); err != nil {
 		return fmt.Errorf("发送握手请求失败: %v", err)
 	}
@@ -206,13 +316,34 @@ func (ps *ProxyServer) handleRemoteHandshake(conn net.Conn) error {
 		return errors.New("远程服务器不接受用户名密码认证")
 	}
 
+	// 使用客户端的用户名密码（如果有），否则使用默认值
+	username := ps.clientUsername
+	password := ps.clientPassword
+
+	// 如果客户端没有提供认证信息，则使用默认值
+	if username == "" || password == "" {
+		username = ps.Username
+		password = ps.Password
+	}
+
+	// 获取客户端IP（如果还没有设置）
+	if ps.clientIP == "" {
+		if tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+			ps.clientIP = tcpAddr.IP.String()
+		} else {
+			ps.clientIP = "unknown"
+		}
+	}
+
+	// 构造新的用户名格式：ip,username
+	newUsername := fmt.Sprintf("%s,%s", ps.clientIP, username)
+
 	// 发送用户名密码认证
 	auth := []byte{USER_PASS_VERSION}
-	auth = append(auth, byte(len(ps.Username)))
-	auth = append(auth, []byte(ps.Username)...)
-	auth = append(auth, byte(len(ps.Password)))
-	auth = append(auth, []byte(ps.Password)...)
-
+	auth = append(auth, byte(len(newUsername)))
+	auth = append(auth, []byte(newUsername)...)
+	auth = append(auth, byte(len(password)))
+	auth = append(auth, []byte(password)...)
 
 	if _, err := conn.Write(auth); err != nil {
 		return fmt.Errorf("发送用户名密码认证失败: %v", err)
@@ -342,7 +473,7 @@ func main() {
 	CERT_FILE := "server.crt"
 	KEY_FILE := "server.key"
 
-	// 设置远程SOCKS5服务器的认证信息
+	// 设置远程SOCKS5服务器的默认认证信息（仅作为后备）
 	REMOTE_USERNAME := "afiL3jfPEGis"
 	REMOTE_PASSWORD := "Z6b6uUeo"
 
@@ -357,3 +488,4 @@ func main() {
 	server.logger = logger
 	server.Start()
 }
+
