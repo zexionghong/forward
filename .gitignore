@@ -1,0 +1,58 @@
+# 编译输出目录
+dist/
+bin/
+build/
+out/
+
+# 可执行文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go 相关
+*.test
+*.prof
+*.cover
+coverage.txt
+
+# 临时文件
+*.tmp
+*.temp
+*.log
+*.swp
+*.swo
+*~
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.sublime-*
+
+# 操作系统
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# 证书文件 (如果是敏感的)
+# *.pem
+# *.key
+# *.crt
+
+# 配置文件 (如果包含敏感信息)
+# config.json
+# config.yaml
+
+# 依赖缓存
+vendor/
+node_modules/
