@@ -1,0 +1,27 @@
+# 忽略构建产物
+dist/
+*.exe
+ipflex*
+
+# 忽略开发文件
+.git/
+.gitignore
+README.md
+Makefile
+
+# 忽略临时文件
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
+
+# 忽略IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 忽略不需要的证书配置文件
+san.cnf
+cert.pem
+key.pem

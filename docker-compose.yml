@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # 代理服务器服务
+  proxy-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: ipflex-server
+    restart: unless-stopped
+    ports:
+      - "12347:12347"  # HTTP代理端口
+      - "12348:12348"  # SOCKS5代理端口
+    environment:
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "netstat", "-an", "|", "grep", ":12347"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# 可选：添加数据卷用于持久化日志
+volumes:
+  proxy-logs:
+    driver: local

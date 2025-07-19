@@ -395,9 +395,9 @@ func main() {
 	logger := log.New(io.MultiWriter(log.Writer()), "[PROXY] ", log.LstdFlags|log.Lshortfile)
 
 	// 服务器配置
-	REMOTE_HTTP_HOST := "127.0.0.1"
+	REMOTE_HTTP_HOST := "proxy.ipflex.ink"
 	REMOTE_HTTP_PORT := 12345
-	REMOTE_SOCKS5_HOST := "127.0.0.1"
+	REMOTE_SOCKS5_HOST := "proxy.ipflex.ink"
 	REMOTE_SOCKS5_PORT := 12346
 
 	LOCAL_HTTP_PORT := 12347
