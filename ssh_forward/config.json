@@ -1,0 +1,30 @@
+{
+  "ssh": {
+    "host": "forward.ipflex.ink",
+    "port": 22,
+    "user": "tunnel_user",
+    "password": "proxy",
+    "key_file": "",
+    "embedded_key_name": "id_rsa",
+    "use_embedded_key": false
+  },
+  "local": {
+    "host": "127.0.0.1",
+    "ports": [
+      12345,
+      12346
+    ]
+  },
+  "remote": {
+    "host": "proxy.ipflex.ink",
+    "ports": [
+      12345,
+      12346
+    ]
+  },
+  "settings": {
+    "reconnect_interval": 5,
+    "keep_alive": 60,
+    "debug": false
+  }
+}

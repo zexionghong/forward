@@ -1,0 +1,18 @@
+# 推荐的SSH服务器配置（修改 /etc/ssh/sshd_config）
+
+Match User tunnel_user
+    AllowTcpForwarding yes
+    X11Forwarding no
+    PermitTunnel no
+    GatewayPorts no
+    AllowAgentForwarding no
+    # 注释掉或删除这行: ForceCommand /bin/false
+    ChrootDirectory /home/tunnel_user
+    PermitTTY no
+    # 添加以下限制以保持安全性
+    PermitOpen 127.0.0.1:12345 127.0.0.1:12346
+    # 或者允许连接到特定的外部地址
+    # PermitOpen proxy.ipflex.ink:12345 proxy.ipflex.ink:12346
+
+# 重启SSH服务
+# systemctl restart sshd
